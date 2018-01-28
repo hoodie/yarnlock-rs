@@ -1,0 +1,9 @@
+[package]
+name = "yarn-lock"
+version = "0.1.0"
+authors = ["Hendrik Sollich <hendrik@hoodie.de>"]
+
+[dependencies]
+nom = "3.2.1"
+#indent_tokenizer = "0.2.0"
+indent_tokenizer = {git = "https://github.com/hoodie/indent_tokenizer"}
