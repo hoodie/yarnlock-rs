@@ -4,6 +4,7 @@ use indent_tokenizer::{tokenize, Token};
 use nom::{line_ending, IResult};
 use semver::{Version, VersionReq};
 use url::Url;
+use multimap::MultiMap;
 
 use std::collections::HashMap;
 use std::str::from_utf8;
@@ -99,12 +100,21 @@ fn split_at_last_at(s: &str) -> (Option<&str>, Option<&str>) {
 }
 
 /// Parses content of a `yarn.lock` into a `Vec<DepdencencyLock>`.
-// TODO: Use own errors
 pub fn parse(content: &str) -> Result<Vec<DependencyLock>, error::Error> {
     Ok(tokenize(content)
         .map_err(error::IndentationFail)?
         .iter()
         .flat_map(read_block)
+        .collect())
+}
+
+/// Parses content of a `yarn.lock` and maps the linto a `MultiMap<Strign, DepdencencyLock>`.
+pub fn parse_by_name(content: &str) -> Result<MultiMap<String, DependencyLock>, error::Error> {
+    Ok(tokenize(content)
+        .map_err(error::IndentationFail)?
+        .iter()
+        .flat_map(read_block)
+        .map(|lock| (lock.name.clone(), lock))
         .collect())
 }
 

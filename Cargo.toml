@@ -10,3 +10,4 @@ indent_tokenizer = "0.4.0"
 semver = "0.9"
 failure = "0.1"
 url = { git = "https://github.com/hoodie/rust-url", features = ["serde"] }
+multimap = "0.4.0"
