@@ -7,7 +7,10 @@ extern crate log;
 extern crate multimap;
 #[macro_use]
 extern crate nom;
+#[macro_use]
+extern crate pretty_assertions;
 extern crate semver;
+extern crate semver_parser;
 extern crate url;
 
 use multimap::MultiMap;
@@ -25,6 +28,8 @@ use std::result::Result;
 mod parser;
 pub use parser::{parse, parse_by_name};
 pub mod error;
+
+pub mod npm_semver;
 
 /// Represents one dependency Lock.
 ///

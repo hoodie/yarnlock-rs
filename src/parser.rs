@@ -8,6 +8,7 @@ use multimap::MultiMap;
 
 use std::collections::HashMap;
 use std::str::from_utf8;
+use std::ops::Deref;
 
 use super::DependencyLock;
 use error;
@@ -64,7 +65,7 @@ fn read_dependencies(tokens: &[Token]) -> HashMap<String, VersionReq> {
                 let (key, val) = tup_line;
                 Some((key.to_string(), val))
             } else {
-                error!("INVALID Depedency {:?}", line);
+                error!("INVALID Depedency {}", line.deref());
                 None
             }
         })
@@ -84,10 +85,10 @@ fn read_block(block: &Token) -> Vec<DependencyLock> {
             head_lines
                 .into_iter()
                 .map(|(last_seen, name)| DependencyLock {
-                    name:         name.unwrap().to_string(),
-                    last_seen:    last_seen.and_then(|s| VersionReq::parse(s).ok()),
-                    version:      version.clone(),
-                    resolved:     resolved.clone(),
+                    name: name.unwrap().to_string(),
+                    last_seen: last_seen.and_then(|s| VersionReq::parse(s).ok()),
+                    version: version.clone(),
+                    resolved: resolved.clone(),
                     dependencies: dependencies.clone(),
                 })
         })
@@ -119,7 +120,7 @@ pub fn parse_by_name(content: &str) -> Result<MultiMap<String, DependencyLock>, 
 }
 
 fn headline_parts(content: &str) -> IResult<&[u8], Vec<(Option<&str>, Option<&str>)>> {
-    headline_parts_int(content.as_bytes())
+    at_tuple_list(content.as_bytes())
 }
 
 named!{
@@ -132,17 +133,29 @@ headline(&[u8]) -> &str,
 }
 
 named!{
-headline_parts_int(&[u8]) -> Vec<(Option<&str>, Option<&str>)>,
-    separated_list_complete!(
-        ws!(tag!(",")),
-        do_parse!(
-            seen: alt!( map!( map_res!(is_not!(":,\""), from_utf8), split_at_last_at)
-                      | map!( map_res!(delimited!(char!('"'), is_not!(":,\""), char!('"')), from_utf8), split_at_last_at)
-                      )
-            >> (seen)
-        )
-    )
+at_tuple(&[u8]) -> (Option<&str>, Option<&str>),
+    map!(
+        map_res!(
+            alt!( is_not!(",\"")
+                | delimited!(char!('"'), is_not!(":\""), char!('"'))
+                )
+        , from_utf8)
+    , split_at_last_at)
 }
+
+named!{
+at_tuple_list(&[u8]) -> Vec<(Option<&str>, Option<&str>)>,
+    separated_list_complete!(ws!(tag!(",")), at_tuple)
+}
+
+// named!{
+// headline_parts2_int(&[u8]) -> (Option<&str>, Option<VersionReq>),
+//          alt!(
+//              map!( map_res!(is_not!(":,\""), from_utf8), split_at_last_at)
+//              |
+//              map!( map_res!(delimited!(char!('"'), is_not!(":,\""), char!('"')), from_utf8), split_at_last_at)
+//              )
+// }
 
 fn dependency_line(content: &str) -> IResult<&[u8], (&str, VersionReq)> {
     dependency_line_int(content.as_bytes())
@@ -254,12 +267,31 @@ mod tests {
         );
 
         assert_parser!(
+            headline_parts(r#""@ava/babe,-plugin-throws-helper@^2.0.0", "@ava/babel-plugin-throws-helper@^2.0.0""#),
+            vec![(Some("^2.0.0"), Some("@ava/babe,-plugin-throws-helper")),
+                 (Some("^2.0.0"), Some("@ava/babel-plugin-throws-helper"))]
+        );
+
+        assert_parser!(
             headline_parts(r#"assertion-error@^1.0.1, assertion-error@^1.0.1"#),
             vec![
                 (Some("^1.0.1"), Some("assertion-error")),
                 (Some("^1.0.1"), Some("assertion-error")),
             ]
         );
+    }
+
+    #[test]
+    fn parses_head_lines_deep() {
+        assert_parser!(
+            headline_parts("fstream@>= 0.1.30 < 1"),
+            vec![
+                (
+                    Some(">= 0.1.30 < 1"),
+                    Some("fstream"),
+                )
+
+            ]);
     }
 
     #[test]
@@ -287,6 +319,48 @@ mod tests {
         assert_parser!(
             dependency_line(r#""window-size" "0.1.0""#),
             ("window-size", VersionReq::parse("0.1.0").unwrap())
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn read_dependencies() {
+        let samples = [
+            r#"through ">=2.2.7 <3""#,
+            r#"readable-stream "^2.0.0 || ^1.1.13""#,
+            r#"readable-stream "> 1.0.0 < 3.0.0""#,
+            r#"traverse ">=0.3.0 <0.4""#,
+            r#"readable-stream "1 || 2""#,
+            r#"mkdirp ">=0.5 0""#,
+            r#"minimatch "2 || 3""#,
+            r#"statuses ">= 1.3.1 < 2""#,
+            r#"npm-package-arg "^4.0.0 || ^5.0.0""#,
+            r#"read-package-json "1 || 2""#,
+            r#"semver "2.x || 3.x || 4 || 5""#,
+            r#"nopt "2 || 3""#,
+            r#"npmlog "0 || 1 || 2 || 3 || 4""#,
+            r#"semver "2 || 3 || 4 || 5""#,
+            r#"semver "^2.3.0 || 3.x || 4 || 5""#,
+            r#"normalize-package-data "~1.0.1 || ^2.0.0""#,
+            r#"npm-package-arg "^3.0.0 || ^4.0.0 || ^5.0.0""#,
+            r#"semver "2 >=2.2.1 || 3.x || 4 || 5""#,
+            r#"semver "2 || 3 || 4""#,
+            r#"over ">= 0.0.5 < 1""#,
+            r#"setimmediate ">= 1.0.2 < 2""#,
+            r#"slice-stream ">= 1.0.0 < 2""#,
+            r#"semver "2 || 3 || 4 || 5""#,
+            r#"util ">=0.10.3 <1""#,
+            r#"thenify ">= 3.1.0 < 4""#,
+            r#"binary ">= 0.3.0 < 1""#,
+            r#"fstream ">= 0.1.30 < 1""#,
+            r#"match-stream ">= 0.0.2 < 1""#,
+            r#"pullstream ">= 0.4.1 < 1""#,
+            r#"setimmediate ">= 1.0.1 < 2""#,
+        ];
+        let sample = samples[0];
+        assert_parser!(
+            dependency_line(sample),
+            ("through", VersionReq::parse("2").unwrap())
         );
     }
 
