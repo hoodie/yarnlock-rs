@@ -12,6 +12,7 @@ use std::ops::Deref;
 
 use super::DependencyLock;
 use error;
+use npm_semver::version_reqs;
 
 fn read_versionreq(tokens: &[Token]) -> Option<VersionReq> {
     tokens
@@ -45,7 +46,7 @@ fn read_version_resolved(tokens: &[Token]) -> (Option<Version>, Option<Url>) {
     (version, resolved)
 }
 
-fn read_dependencies(tokens: &[Token]) -> HashMap<String, VersionReq> {
+fn read_dependencies(tokens: &[Token]) -> HashMap<String, Vec<VersionReq>> {
     tokens
         .iter()
         .filter(|token| {
@@ -157,19 +158,22 @@ at_tuple_list(&[u8]) -> Vec<(Option<&str>, Option<&str>)>,
 //              )
 // }
 
-fn dependency_line(content: &str) -> IResult<&[u8], (&str, VersionReq)> {
+fn dependency_line(content: &str) -> IResult<&[u8], (&str, Vec<VersionReq>)> {
     dependency_line_int(content.as_bytes())
 }
 
-named!{
-dependency_line_int(&[u8]) -> (&str, VersionReq),
-    ws!(tuple!(alt!( map_res!(delimited!(char!('"'), is_not!(",\""), char!('"')), from_utf8)
-                   | map_res!(is_not!(" "), from_utf8)
-                   ),
-        map_res!(
-        map_res!(delimited!(char!('"'), is_not!(",\""), char!('"')), from_utf8)
-        , VersionReq::parse)
-    ))
+named!{ quoted_string(&[u8]) -> (&str),
+    alt!( map_res!(delimited!(char!('"'), is_not!(",\""), char!('"')), from_utf8)
+        | map_res!(is_not!(" "), from_utf8)
+    )
+}
+
+named!{ dependency_line_int(&[u8]) -> (&str, Vec<VersionReq>),
+
+    ws!(
+    tuple!(quoted_string, version_reqs)
+    )
+
 }
 
 fn version_line(content: &str) -> IResult<&[u8], Version> {
@@ -181,9 +185,7 @@ version_line_int(&[u8]) -> Version,
     map_res!(
     ws!(do_parse!(
         tag!("version") >>
-        version: alt!( map_res!(delimited!(char!('"'), is_not!(",\""), char!('"')), from_utf8)
-                     | map_res!(is_not!(" "), from_utf8)
-                     )
+        version: quoted_string
         >> (version)
         )
     ), Version::parse)
@@ -197,10 +199,8 @@ named!{
 versionreq_line_int(&[u8]) -> VersionReq,
     map_res!(
     ws!(do_parse!(
-        tag!("version") >>
-        versionreq: alt!( map_res!(delimited!(char!('"'), is_not!(",\""), char!('"')), from_utf8)
-                        | map_res!(is_not!(" "), from_utf8)
-                        )
+        tag!("version")
+        >> versionreq: quoted_string
         >> (versionreq)
         )
     ), VersionReq::parse)
@@ -298,27 +298,27 @@ mod tests {
     fn parses_dependency_lines() {
         assert_parser!(
             dependency_line(r#"version "1.4.0""#),
-            ("version", VersionReq::parse("1.4.0").unwrap())
+            ("version", vec![VersionReq::parse("1.4.0").unwrap()])
         );
         assert_parser!(
             dependency_line(r#"camelcase "^1.0.2""#),
-            ("camelcase", VersionReq::parse("^1.0.2").unwrap())
+            ("camelcase", vec![VersionReq::parse("^1.0.2").unwrap()])
         );
         assert_parser!(
             dependency_line(r#"cliui "^2.1.0""#),
-            ("cliui", VersionReq::parse("^2.1.0").unwrap())
+            ("cliui", vec![VersionReq::parse("^2.1.0").unwrap()])
         );
         assert_parser!(
             dependency_line(r#"decamelize "^1.0.0""#),
-            ("decamelize", VersionReq::parse("^1.0.0").unwrap())
+            ("decamelize", vec![VersionReq::parse("^1.0.0").unwrap()])
         );
         assert_parser!(
             dependency_line(r#"window-size "0.1.0""#),
-            ("window-size", VersionReq::parse("0.1.0").unwrap())
+            ("window-size", vec![VersionReq::parse("0.1.0").unwrap()])
         );
         assert_parser!(
             dependency_line(r#""window-size" "0.1.0""#),
-            ("window-size", VersionReq::parse("0.1.0").unwrap())
+            ("window-size", vec![VersionReq::parse("0.1.0").unwrap()])
         );
     }
 
@@ -359,9 +359,12 @@ mod tests {
         ];
         let sample = samples[0];
         assert_parser!(
-            dependency_line(sample),
-            ("through", VersionReq::parse("2").unwrap())
+            dependency_line(r#"through ">=2.2.7""#),
+            ("through", vec![VersionReq::parse(">=2.2.7").unwrap()])
         );
+        for sample in &samples {
+            println!("{:?}", dependency_line(sample));
+        }
     }
 
     #[test]

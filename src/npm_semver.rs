@@ -1,37 +1,51 @@
-use semver_parser::range::{Predicate, VersionReq};
-
+use semver_parser::range::{Op, Predicate, VersionReq as VersionReqInner, WildcardVersion};
+use semver::VersionReq;
 use nom::IResult;
 
-type Semver<'a> = (Option<&'a str>, &'a str, Option<&'a str>, Option<&'a str>);
+use std::str::FromStr;
+
+type Semver<'a> = (Op, u64, Option<&'a str>, Option<&'a str>);
 
 /// Tuple of a lower and optinal upper version limit
 type SemverRange<'a> = (Semver<'a>, Option<Semver<'a>>);
 
-pub fn version_ranges(raw: &str) -> IResult<&[u8], Vec<SemverRange>> {
-    parsers::semver_range_list(raw.as_bytes())
+pub fn version_reqs(raw: &[u8]) -> IResult<&[u8], Vec<VersionReq>> {
+    parsers::semver_range_list(raw)
+           .map(|r| r.into_iter()
+                     .map(range2req)
+                     .map(Into::into)
+                     .collect()
+    )
 }
 
-// fn range2req(range: &SemverRange) -> VersionReq {
-//
-//     VersionReq {
-//         predicates: Some(range.0).iter()
-//             .chain(range.1.iter())
-//             .map(|vers| -> Predicate {
-//     op: Op::from_str(vers.0).unwrap(),
-//     major: vers.1.parse().unwrap(),
-//     minor: Option<u64>,
-//     patch: Option<u64>,
-//     pre: Vec::new(),
-//             })
-//             .collect::<Vec<Predicate>>()
-//      }
-// }
+ fn range2req(range: SemverRange) -> VersionReqInner {
+     VersionReqInner {
+         predicates: Some(range.0).into_iter()
+             .chain(range.1.into_iter())
+             .map(|vers| {
+                 let op = match (vers.0, vers.2) {
+                     (_, Some("x")) => Op::Wildcard(WildcardVersion::Minor),
+                     (x, _) => x
+                 };
+
+                 Predicate {
+                    op,
+                    major: vers.1,
+                    minor: vers.2.and_then(|x| FromStr::from_str(x).ok()),
+                    patch: vers.3.and_then(|x| FromStr::from_str(x).ok()),
+                    pre: Vec::new(),
+                }
+             })
+             .collect::<Vec<Predicate>>()
+      }
+ }
 
 mod parsers {
     use super::*;
 
     use nom::{is_alphanumeric, rest};
     use std::str::from_utf8;
+    use std::str::FromStr;
     use semver_parser::range::Op;
 
     named!{ take_allowed(&[u8]) -> &[u8],
@@ -39,9 +53,11 @@ mod parsers {
         take_while!(is_alphanumeric)
     }
 
-    named!{ tilldot(&[u8]) -> &str,
-
-        map_res!( take_allowed, from_utf8)
+    named!{ tilldot(&[u8]) -> u64,
+        map_res!(
+            map_res!(take_allowed, from_utf8),
+            FromStr::from_str
+            )
     }
 
     named!{ fromdot(&[u8]) -> &str,
@@ -59,9 +75,9 @@ mod parsers {
     named!{ semver_prefix(&[u8]) -> &str,
         map_res!(
             alt!(
-                tag!("<=") | tag!(">=") |
-                tag!("<") | tag!(">") |
-                tag!("^") | tag!("~") | tag!("=")
+                tag!("<=") | tag!("<") |
+                tag!(">=") | tag!(">") |
+                tag!("^")  | tag!("~") | tag!("=")
             ), from_utf8
         )
     }
@@ -75,15 +91,15 @@ mod parsers {
 
     fn prefix_to_op(prefix: Option<&str>) -> Op {
         match prefix {
-            Some("=") => Op::Ex,
-            Some(">") => Op::Gt,
+            Some("=")  => Op::Ex,
+            Some(">")  => Op::Gt,
             Some(">=") => Op::GtEq,
-            Some("<") => Op::Lt,
+            Some("<")  => Op::Lt,
             Some("<=") => Op::LtEq,
-            Some("~") => Op::Tilde,
-            Some("^") => Op::Compatible,
-            None => Op::Ex,
-            Some(_) => unreachable!()
+            Some("~")  => Op::Tilde,
+            Some("^")  => Op::Compatible,
+            None       => Op::Ex,
+            Some(_)    => unreachable!()
         }
     }
 
@@ -101,10 +117,10 @@ mod parsers {
 
         ws!(
         do_parse!(
-            prefix: opt!(semver_prefix) >>
-            major: tilldot              >>
-            minor: opt!(fromdot)        >>
-            patch: opt!(fromdot)        >>
+            prefix: semver_op    >>
+            major: tilldot       >>
+            minor: opt!(fromdot) >>
+            patch: opt!(fromdot) >>
             (prefix, major, minor, patch)
         )
         )
@@ -143,48 +159,49 @@ mod parsers {
 
         #[test]
         fn parse_semver() {
-            assert_parser!(semver(b"2.3.4"),        (None,       "2", Some("3"), Some("4")));
-            assert_parser!(semver(b"<=2.3.4"),      (Some("<="), "2", Some("3"), Some("4")));
-            assert_parser!(semver(b">=2.3.4"),      (Some(">="), "2", Some("3"), Some("4")));
-            assert_parser!(semver(b"=2.3.4"),       (Some("="),  "2", Some("3"), Some("4")));
-            assert_parser!(semver(b">2.3.4"),       (Some(">"),  "2", Some("3"), Some("4")));
-            assert_parser!(semver(b"^2.3.4"),       (Some("^"),  "2", Some("3"), Some("4")));
-            assert_parser!(semver(b"~2.3.4"),       (Some("~"),  "2", Some("3"), Some("4")));
-            assert_parser!(semver(b">= 2.3.4"),     (Some(">="), "2", Some("3"), Some("4")));
-            assert_parser!(semver(b"2.3.4"),        (None,       "2", Some("3"), Some("4")));
-            assert_parser!(semver(b"2.3.4"),        (None,       "2", Some("3"), Some("4")));
+            assert_parser!(semver(b"2.3.4"),        (Op::Ex,         2, Some("3"), Some("4")));
+            assert_parser!(semver(b"<=2.3.4"),      (Op::LtEq,       2, Some("3"), Some("4")));
+            assert_parser!(semver(b">=2.3.4"),      (Op::GtEq,       2, Some("3"), Some("4")));
+            assert_parser!(semver(b"=2.3.4"),       (Op::Ex,         2, Some("3"), Some("4")));
+            assert_parser!(semver(b">2.3.4"),       (Op::Gt,         2, Some("3"), Some("4")));
+            assert_parser!(semver(b"^2.3.4"),       (Op::Compatible, 2, Some("3"), Some("4")));
+            assert_parser!(semver(b"^ 2.3.4"),      (Op::Compatible, 2, Some("3"), Some("4")));
+            assert_parser!(semver(b"~2.3.4"),       (Op::Tilde,      2, Some("3"), Some("4")));
+            assert_parser!(semver(b"~ 2.3.4"),      (Op::Tilde,      2, Some("3"), Some("4")));
+            assert_parser!(semver(b" >= 2.3.4"),    (Op::GtEq,       2, Some("3"), Some("4")));
+            assert_parser!(semver(b"2.3.4"),        (Op::Ex,         2, Some("3"), Some("4")));
+            assert_parser!(semver(b"2.3.4"),        (Op::Ex,         2, Some("3"), Some("4")));
 
-            assert_parser!(semver(b">= 2.3"),       (Some(">="), "2", Some("3"), None)     );
+            assert_parser!(semver(b">= 2.3"),       (Op::GtEq,       2, Some("3"), None)     );
+            assert_parser!(semver(b"2.x"),          (Op::Ex,         2, Some("x"), None)     );
 
-            assert_parser!(semver(b"2.3"),          (None,       "2", Some("3"), None)     );
-            assert_parser!(semver(b"2"),            (None,       "2", None,      None)     );
-            assert_parser!(semver(b" 2.3 "),        (None,       "2", Some("3"), None)     );
-            assert_parser!(semver(b" 2 "),          (None,       "2", None,      None)     );
+            assert_parser!(semver(b"2.3"),          (Op::Ex,         2, Some("3"), None)     );
+            assert_parser!(semver(b"2"),            (Op::Ex,         2, None,      None)     );
+            assert_parser!(semver(b" 2.3 "),        (Op::Ex,         2, Some("3"), None)     );
+            assert_parser!(semver(b" 2 "),          (Op::Ex,         2, None,      None)     );
         }
 
         #[test]
         fn parse_semver_range() {
             assert_parser!(
                 semver_range(b">=2.3.4 < 3"), (
-                    (Some(">="), "2", Some("3"), Some("4")),
-               Some((Some("<"),  "3", None, None))
+                    (Op::GtEq, 2, Some("3"), Some("4")),
+               Some((Op::Lt,   3, None, None))
                     )
                 );
 
-            //let expected = (
-            //        (Some(">="), "2", Some("3"), Some("4")),
-            //   Some((Some("<"),  "3", Some("2"), None))
-            //        );
+            let expected = (
+                    (Op::GtEq, 2, Some("3"), Some("4")),
+               Some((Op::Lt,   3, Some("2"), None))
+                    );
 
-            //assert_parser!( semver_range(b">=2.3.4 < 3.2"), expected);
+            assert_parser!( semver_range(b">=2.3.4 < 3.2"), expected);
 
+            assert_parser!( semver_range(b">=2.3.4<3.2.1"),
+                ((Op::GtEq, 2, Some("3"), Some("4")), Some((Op::Lt, 3, Some("2"), Some("1")))));
 
-            //let expected = (
-            //        (Some(">="), "2", Some("3"), Some("4")),
-            //   Some((Some("<"),  "3", Some("2"), Some("1")))
-            //        );
-            //assert_parser!( semver_range(b">=2.3.4<3.2.1"), expected);
-            //assert_parser!( semver_range(b">=2.3.4 < 3.2.1"), expected);
+            assert_parser!( semver_range(b">=2.3.4 < 3.2.1"),
+                ((Op::GtEq, 2, Some("3"), Some("4")), Some((Op::Lt, 3, Some("2"), Some("1")))));
 
 
         }
@@ -193,7 +210,7 @@ mod parsers {
         fn parse_tagged_semver() {
             assert_parser!(
                 tagged_semver(b"2.3.4-pre"),
-                ((None, "2", Some("3"), Some("4")), "pre")
+                ((Op::Ex, 2, Some("3"), Some("4")), "pre")
                 );
         }
 

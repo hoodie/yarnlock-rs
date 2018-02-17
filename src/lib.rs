@@ -40,7 +40,7 @@ pub struct DependencyLock {
     pub last_seen:    Option<VersionReq>,
     pub version:      Option<Version>,
     pub resolved:     Option<Url>,
-    pub dependencies: HashMap<String, VersionReq>,
+    pub dependencies: HashMap<String, Vec<VersionReq>>,
 }
 
 fn read_file(path: &Path) -> Result<String, error::Error> {
